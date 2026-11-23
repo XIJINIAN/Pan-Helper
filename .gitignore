@@ -1,0 +1,24 @@
+# 临时产物
+__pycache__/
+*.pyc
+*.log
+.DS_Store
+
+# 凭据：绝不入库
+.bduss
+.baidu_cookie
+.baidu_pan_cookie
+
+# 下载中间件
+.dlink.txt
+baidu_epub_dlink.txt
+*.part
+*.chunks
+
+# 验证截图（随手拍的量测图，不属于源码）
+bpd_*.jpg
+bpd_*.png
+audit_*.jpg
+
+# 内部开发日志：留在本地，不进开源仓库
+BAIDU_DEVLOG.md
