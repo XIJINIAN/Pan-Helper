@@ -10,7 +10,7 @@
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.8%2B-3776AB?logo=python&logoColor=white)
-![Userscript](https://img.shields.io/badge/userscript-2.9.50-4a90d9)
+![Userscript](https://img.shields.io/badge/userscript-2.9.51-4a90d9)
 ![Daemon](https://img.shields.io/badge/daemon-1.6.0-2f9e44)
 
 ## 功能
@@ -47,7 +47,7 @@ python3 bpd_daemon.py
 curl -s 127.0.0.1:8765/ping
 ```
 
-守护进程未运行时，脚本会自动降级：「复制链接」改为复制一段不依赖第三方工具的 `curl` 分块命令，「推送」则直接提示未启动。页面内下载不受影响。
+守护进程未运行时，脚本会自动降级：「复制链接」改为复制一段只依赖 `curl` 的分块命令（每块完成都会回显一行，中断后在同一目录重跑就是续传），「推送」则直接提示未启动。页面内下载不受影响。
 
 ## 命令行下载（不打开浏览器）
 

@@ -2,7 +2,7 @@
 // @name         百度网盘 直链下载（接管原生下载按钮）
 // @name:en      Baidu Pan direct download — takes over the native 下载 button
 // @namespace    https://pan.baidu.com/
-// @version      2.9.50
+// @version      2.9.51
 // @description  点网盘里原来那个「下载」按钮，就用客户端身份分块从 PCS/CDN 拉真实文件，不弹「>50MB 请用客户端」。进度是套在原生图标上的一圈细环，悬停出卡片：暂停/继续/取消、复制直链、复制命令行、送到本机终端多线程下载。
 // @author       -
 // @homepageURL  https://github.com/XIJINIAN/Pan-Helper
@@ -35,7 +35,7 @@
 (function () {
   'use strict';
 
-  var VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.9.50';
+  var VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '2.9.51';
   var CHUNK = 512 * 1024;                 // 512KiB：远低于 4MiB 墙，进度每 ~4s 动一次，请求固定开销摊得开
   var CLIENT_UA = [
     'netdisk;P2SP;3.0.20.128;Windows10;AMD64;Resolution:1920x1080',
@@ -116,7 +116,10 @@
   var DAEMON_INFO = null;
 
   /* 没有守护进程时，「复制链接」改成给一段纯 shell 命令：curl 自己按 4MiB 闭合 Range 并行拉块。
-     机器上有 bash + curl 就能用（macOS / Linux / WSL 都有），不需要 python、不需要 aria2。 */
+     机器上有 bash + curl 就能用（macOS / Linux / WSL 都有），不需要 python、不需要 aria2。
+     三个踩过的坑：① 每块都得回显，否则几十分钟没输出，看着像卡死（97MB 那回就是这么被 Ctrl-C 的）
+     ② 不能写 exit 1——粘到交互终端里执行失败会把整个窗口关掉 ③ part.* 落在当前目录，
+     重跑同一段就是续传，这一点必须写在输出里，否则没人知道该不该重来。 */
   function curlLoop(t) {
     if (!t || !t.url || !t.size) return '';
     var CS = 4194304, n = Math.max(1, Math.ceil(t.size / CS)), last = t.size - 1;
@@ -124,15 +127,30 @@
     var ua = (t.ua || CLIENT_UA[0]).replace(/["`$\\]/g, '\\$&');
     return [
       '# 零依赖版：' + n + ' 个 4MiB 闭合 Range，4 路并行（只要有 bash + curl，不用守护进程/aria2/python）',
+      '# 百度会随机掐断连接（curl 报 transfer closed），每块都带重试；真掉了就在同一目录重跑整个脚本',
+      '# 百度对这个账号的总带宽只有几十到一百多 KB/s'
+        + (t.size >= 8 * 1048576
+          ? '，' + mb(t.size) + ' 要跑几十分钟以上——慢是账号限速，不是卡住'
+          : '，几 MB 的小文件一两分钟就能完'),
       'U="' + t.url + '"',
       'CS=' + CS + '; N=' + n + '; LAST=' + last + '; SIZE=' + t.size + '; UA="' + ua + '"',
       'export U CS N LAST SIZE UA',
-      '# 每块一个文件；已经下好非空的块会跳过，所以中断了重跑这段就是续传',
-      String.raw`seq 0 $((N-1)) | xargs -P 4 -I@ sh -c 'f=$(printf "part.%05d" @); [ -s "$f" ] && exit 0; s=$((@*CS)); e=$((s+CS-1)); [ $e -gt $LAST ] && e=$LAST; curl -fsS --retry 3 -H "User-Agent: $UA" -r $s-$e -o "$f" "$U" || { rm -f "$f"; echo "块 @ 失败" >&2; }'`,
-      'cnt=$(ls part.* 2>/dev/null | wc -l | tr -d " ")',
-      'if [ "$cnt" -lt "$N" ]; then echo "还差 $((N-cnt)) 块没下好，重跑这段会跳过已完成的块"; exit 1; fi',
-      'cat $(ls part.* | sort) > "' + nm + '" && rm -f part.*',
-      'S=$(wc -c < "' + nm + '"); [ "$S" -eq "$SIZE" ] && echo "完成 $S 字节" || echo "大小不对：$S / $SIZE"'
+      'echo "开始：$N 块 × 4MiB，4 路并行，共 $SIZE 字节。中断了就在同一目录重跑这段，已下好的块会跳过"',
+      /* 这里刻意不用 xargs -I：macOS 的 xargs 在 -I 模式下对命令长度有 ~250 字节的硬限制，
+         脚本里只要有中文就会 "command line cannot be assembled, too long"。-n 1 没这个毛病，
+         块号从 $1 拿（末尾那个 _ 是 sh -c 的 $0）。 */
+      String.raw`seq 0 $((N-1)) | xargs -P 4 -n 1 sh -c 'f=$(printf "part.%05d" "$1"); if [ -s "$f" ]; then echo "块 $1 已在，跳过"; exit 0; fi; s=$(($1*CS)); e=$((s+CS-1)); [ $e -gt $LAST ] && e=$LAST; curl -fsS --retry 5 --retry-all-errors --retry-delay 1 -H "User-Agent: $UA" -r $s-$e -o "$f" "$U" && echo "块 $1 ok $(wc -c < "$f" | tr -d " ") B" || { rm -f "$f"; echo "块 $1 失败，重跑这段会重试它" >&2; }' _`,
+      /* 别用 part.* 这种裸 glob：zsh 的 nomatch 会对不上就报错，连带 cnt 变成空串 */
+      'cnt=$(find . -maxdepth 1 -type f -name "part.[0-9]*" | wc -l | tr -d " ")',
+      'if [ "$cnt" -lt "$N" ]; then',
+      '  echo "只下好 $cnt/$N 块：在同一目录重跑这段，已完成的块会跳过"',
+      'else',
+      '  : > "' + nm + '"',
+      '  i=0; while [ "$i" -lt "$N" ]; do cat "$(printf "part.%05d" "$i")" >> "' + nm + '"; i=$((i+1)); done',
+      '  find . -maxdepth 1 -type f -name "part.[0-9]*" -delete',
+      '  S=$(wc -c < "' + nm + '" | tr -d " ")',
+      '  if [ "$S" -eq "$SIZE" ]; then echo "完成 $S 字节 → ' + nm + '"; else echo "大小不对：$S / $SIZE（重跑会补）"; fi',
+      'fi'
     ].join('\n');
   }
 
@@ -1079,7 +1097,9 @@
     var lk = cardEl.querySelector('[data-op="link"]');
     if (lk) {
       lk.innerHTML = STRIP_ICON.link;
-      lk.title = t.url ? '复制 aria2 链接（⌥ = curl 分块命令）' : '还在取直链，稍等';
+      lk.title = !t.url ? '还在取直链，稍等'
+        : (DAEMON_OK === false ? '复制 curl 分块命令（4 路并行，粘到终端跑）'
+          : '复制下载链接（粘到浏览器/下载器；⌥ = aria2c 命令）');
       lk.disabled = !t.url;
     }
     var ps = cardEl.querySelector('[data-op="push"]');
@@ -1633,13 +1653,13 @@
       if (DAEMON_OK === false) {
         /* 守护进程没起：CDN 直链给下载器必 403，改给一段 curl 分块命令，照样 parallax 多线程 */
         tip(copyText(curlLoop(t))
-          ? '没检测到守护进程，已复制零依赖的 curl 分块命令（4 路并行，粘到终端即下）'
+          ? '没检测到守护进程，已复制 curl 分块命令：粘到终端跑，会一块一块回显进度，中断了重跑同一段就是续传'
           : '复制失败，请手动复制');
         return;
       }
       if (op === 'link') {
         tip(copyText(proxyLink(t))
-          ? '已复制下载链接（本机 4MiB 中转，可直接喂 aria2/IDM；⌥ 点复制 aria2c 命令）'
+          ? '已复制下载链接（本机 4MiB 中转，粘到浏览器地址栏或下载器；粘到终端没用，⌥ 点复制命令行）'
           : '复制失败，请手动复制');
         return;
       }
