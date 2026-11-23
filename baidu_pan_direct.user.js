@@ -5,6 +5,8 @@
 // @version      2.9.50
 // @description  点网盘里原来那个「下载」按钮，就用客户端身份分块从 PCS/CDN 拉真实文件，不弹「>50MB 请用客户端」。进度是套在原生图标上的一圈细环，悬停出卡片：暂停/继续/取消、复制直链、复制命令行、送到本机终端多线程下载。
 // @author       -
+// @homepageURL  https://github.com/XIJINIAN/Pan-Helper
+// @supportURL   https://github.com/XIJINIAN/Pan-Helper/issues
 // @match        https://pan.baidu.com/disk/*
 // @match        https://pan.baidu.com/s/*
 // @connect      pan.baidu.com
